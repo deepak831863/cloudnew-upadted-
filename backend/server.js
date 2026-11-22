@@ -18,6 +18,10 @@ dotenv.config({ path: process.env.CONNECTIFY_ENV_FILE || ".env" });
 
 const app = express();
 const server = http.createServer(app);
+if (process.env.NODE_ENV !== "test" && !process.env.JWT_SECRET) {
+  console.error("Missing required environment variable: JWT_SECRET");
+  process.exit(1);
+}
 const configuredOrigin = process.env.CLIENT_ORIGIN || "";
 const allowedOrigins = new Set([
   "http://localhost:5173",
