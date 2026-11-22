@@ -37,7 +37,7 @@ registerSocketHandlers(io);
 
 const port = Number(process.env.PORT || 5000);
 if (process.env.NODE_ENV !== "test") {
-  connectDatabase().then(() => server.listen(port, () => console.log(`Connectify API listening on ${port}`))).catch((error) => {
+  connectDatabase().then(() => server.listen(port, "0.0.0.0", () => console.log(`Connectify API listening on 0.0.0.0:${port}`))).catch((error) => {
     console.error("Unable to start Connectify API:", error.message);
     process.exitCode = 1;
   });

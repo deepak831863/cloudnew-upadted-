@@ -8,6 +8,9 @@
     "start": "node server.js",
     "test": "node --test"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
