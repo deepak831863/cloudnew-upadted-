@@ -1,4 +1,7 @@
-const API_URL = (import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api/v1" : "")).replace(/\/$/, "");
+const API_URL = (
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD ? "https://cloudnew-upadted-7.onrender.com/api/v1" : "")
+).replace(/\/$/, "");
 
 export const apiEnabled = Boolean(API_URL);
 

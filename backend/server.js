@@ -18,11 +18,31 @@ dotenv.config({ path: process.env.CONNECTIFY_ENV_FILE || ".env" });
 
 const app = express();
 const server = http.createServer(app);
-const allowedOrigin = process.env.CLIENT_ORIGIN || "http://localhost:5173";
-const io = new Server(server, { cors: { origin: allowedOrigin, credentials: true } });
+const configuredOrigin = process.env.CLIENT_ORIGIN || "";
+const allowedOrigins = new Set([
+  "http://localhost:5173",
+  "http://localhost:8080",
+  "https://app-puce-six-90.vercel.app",
+  "https://app-7kzbtdgo5-deepak-kushwahas-projects-eed03bde.vercel.app",
+  configuredOrigin,
+].filter(Boolean));
+function socketOrigin(origin, callback) {
+  if (!origin || allowedOrigins.has(origin) || origin.endsWith(".vercel.app")) callback(null, true);
+  else callback(new Error("Origin is not allowed"));
+}
+const io = new Server(server, { cors: { origin: socketOrigin, credentials: true } });
 
 app.use(helmet());
-app.use(cors({ origin: allowedOrigin, credentials: true }));
+app.use(cors({
+  credentials: true,
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin) || origin.endsWith(".vercel.app")) {
+      callback(null, true);
+    } else {
+      callback(new Error("Origin is not allowed"));
+    }
+  },
+}));
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false }));
