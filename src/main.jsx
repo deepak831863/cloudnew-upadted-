@@ -26,7 +26,8 @@ import {
   X,
 } from "lucide-react";
 import "./styles.css";
-import { apiEnabled, apiRequest } from "./api";
+import { apiEnabled, apiRequest, API_SOCKET_URL, setApiToken } from "./api";
+import { io } from "socket.io-client";
 
 const STORAGE_KEY = "connectify-state";
 const seededPeople = [
@@ -144,6 +145,7 @@ function Register({ onBack, onComplete, people }) {
     try {
       if (apiEnabled) {
         const result = await apiRequest("/auth/register", { method: "POST", body: JSON.stringify({ name: values.name, username: values.username, password: values.password, confirmPassword: values.confirm }) });
+        setApiToken(result.token);
         onComplete(result.user, [...people, result.user]);
       } else {
         onComplete({ ...user, password: values.password }, [...people, user]);
@@ -170,6 +172,7 @@ function Login({ onBack, onComplete, people }) {
     try {
       if (apiEnabled) {
         const result = await apiRequest("/auth/login", { method: "POST", body: JSON.stringify({ userId: values.id, password: values.password }) });
+        setApiToken(result.token);
         onComplete(result.user);
       } else {
         if (!person || (person.password && person.password !== values.password)) return setError("That ID or password doesn’t look right.");
@@ -190,6 +193,7 @@ function Login({ onBack, onComplete, people }) {
 
 function ChatDashboard({ state, setState, onLogout }) {
   const [activeId, setActiveId] = useState(state.people[0]?.id || "");
+  const [activeConversationId, setActiveConversationId] = useState("");
   const [view, setView] = useState("chats");
   const [query, setQuery] = useState("");
   const [composer, setComposer] = useState("");
@@ -200,13 +204,91 @@ function ChatDashboard({ state, setState, onLogout }) {
   const messages = state.messages[activeId] || [];
   const filteredPeople = useMemo(() => state.people.filter((person) => `${person.name} ${person.username}`.toLowerCase().includes(query.toLowerCase())), [state.people, query]);
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }, [state]);
+  useEffect(() => {
+    if (!apiEnabled) return;
+    let cancelled = false;
+    apiRequest("/conversations").then(({ conversations }) => {
+      if (cancelled) return;
+      const people = conversations.flatMap((conversation) =>
+        conversation.participants
+          .filter((person) => person.id !== state.user.id && person.userId !== state.user.id)
+          .map((person) => ({ ...person, id: person.userId, initials: person.name.split(" ").map((word) => word[0]).join("").slice(0, 2).toUpperCase(), color: "ink" }))
+      );
+      if (conversations.length) {
+        const conversation = conversations[0];
+        const person = people.find((item) => conversation.participants.some((participant) => participant.userId === item.id));
+        setActiveConversationId(conversation._id);
+        if (person) setActiveId(person.id);
+      }
+      if (people.length) updateState({ people });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!apiEnabled || !activeConversationId) return;
+    apiRequest(`/messages/${activeConversationId}`).then(({ messages }) => {
+      updateState({ messages: { ...state.messages, [activeId]: messages.map((message) => ({
+        id: message._id,
+        from: message.sender.mongoId === state.user.mongoId || message.sender.userId === state.user.id ? "me" : "them",
+        text: message.deletedForEveryone ? "Message deleted" : message.content,
+        time: new Date(message.createdAt).toLocaleTimeStamp ? new Date(message.createdAt).toLocaleTimeStamp() : new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        read: true,
+      })) } });
+    }).catch(() => {});
+  }, [activeConversationId]);
+  useEffect(() => {
+    if (!apiEnabled || !activeConversationId) return;
+    const socket = io(API_SOCKET_URL, { auth: { token: localStorage.getItem("connectify_api_token") }, withCredentials: true });
+    socket.emit("join_conversation", activeConversationId);
+    socket.on("receive_message", (message) => {
+      updateState({ messages: { ...state.messages, [activeId]: [...(state.messages[activeId] || []), {
+        id: message._id,
+        from: message.sender?.userId === state.user.id ? "me" : "them",
+        text: message.deletedForEveryone ? "Message deleted" : message.content,
+        time: "now",
+        read: true,
+      }] } });
+    });
+    return () => socket.disconnect();
+  }, [activeConversationId]);
   function updateState(next) { setState({ ...state, ...next }); }
-  function sendMessage(e) {
+  async function sendMessage(e) {
     e.preventDefault();
     if (!composer.trim() || !active) return;
-    const next = [...messages, { id: Date.now(), from: "me", text: composer.trim(), time: "now", read: true }];
-    updateState({ messages: { ...state.messages, [activeId]: next } });
-    setComposer("");
+    try {
+      if (apiEnabled && activeConversationId) {
+        await apiRequest(`/messages/${activeConversationId}`, { method: "POST", body: JSON.stringify({ content: composer.trim() }) });
+      } else if (apiEnabled && !activeConversationId) {
+        const { conversation } = await apiRequest("/conversations", { method: "POST", body: JSON.stringify({ userId: active.id }) });
+        setActiveConversationId(conversation._id);
+        await apiRequest(`/messages/${conversation._id}`, { method: "POST", body: JSON.stringify({ content: composer.trim() }) });
+      } else {
+        const next = [...messages, { id: Date.now(), from: "me", text: composer.trim(), time: "now", read: true }];
+        updateState({ messages: { ...state.messages, [activeId]: next } });
+      }
+      setComposer("");
+    } catch (requestError) {
+      setToast(requestError.message);
+      setTimeout(() => setToast(""), 2200);
+    }
+  }
+  async function openConversation(person) {
+    if (!apiEnabled) {
+      setActiveId(person.id);
+      setView("chats");
+      setMobileSidebar(false);
+      return;
+    }
+    try {
+      const { conversation } = await apiRequest("/conversations", { method: "POST", body: JSON.stringify({ userId: person.id }) });
+      setActiveId(person.id);
+      setActiveConversationId(conversation._id);
+      setView("chats");
+      setMobileSidebar(false);
+    } catch (requestError) {
+      setToast(requestError.message);
+      setTimeout(() => setToast(""), 2200);
+    }
   }
   function copyId() {
     navigator.clipboard?.writeText(state.user.id);
@@ -222,7 +304,7 @@ function ChatDashboard({ state, setState, onLogout }) {
       <div className="sidebar-bottom"><button onClick={() => setProfileOpen(true)}><Settings size={17} /> Settings</button><button onClick={onLogout}><ArrowLeft size={17} /> Sign out</button></div>
     </aside>
     <section className="chat-panel"><header className="chat-header"><button className="icon-button menu-button" onClick={() => setMobileSidebar(true)}><Menu size={20} /></button>{active && <><Avatar person={active} size="md" showStatus /><div className="chat-heading"><strong>{active.name}</strong><small>{active.online ? "Active now" : "Last seen recently"}</small></div><div className="chat-actions"><button className="icon-button"><Bell size={18} /></button><button className="icon-button"><Info size={18} /></button><button className="icon-button"><MoreHorizontal size={18} /></button></div></>}</header>
-      {view === "find" ? <FindPeople people={state.people} query={query} setQuery={setQuery} onSelect={(person) => { setActiveId(person.id); setView("chats"); }} /> : <><div className="message-area">{messages.length ? <>{messages.map((message) => <div key={message.id} className={`message-row ${message.from === "me" ? "message-row-me" : ""}`}><div className={`message-bubble ${message.from === "me" ? "message-bubble-me" : ""}`}>{message.text}<div className="message-meta">{message.time}{message.from === "me" && (message.read ? <CheckCheck size={14} /> : <Check size={14} />)}</div></div></div>)}<div className="typing-indicator"><span /><span /><span /> {active?.name.split(" ")[0]} is typing</div></> : <div className="empty-chat"><div className="empty-icon"><MessageCircle size={24} /></div><h2>Start the conversation</h2><p>Say hello to {active?.name.split(" ")[0]} and make this space yours.</p></div>}</div><form className="composer" onSubmit={sendMessage}><button type="button" className="icon-button"><Paperclip size={19} /></button><input value={composer} onChange={(e) => setComposer(e.target.value)} placeholder={`Message ${active?.name.split(" ")[0] || "someone"}...`} /><button type="button" className="icon-button"><Sparkles size={18} /></button><button className="send-button" aria-label="Send message"><Send size={17} /></button></form></>}
+      {view === "find" ? <FindPeople people={state.people} query={query} setQuery={setQuery} onSelect={openConversation} /> : <><div className="message-area">{messages.length ? <>{messages.map((message) => <div key={message.id} className={`message-row ${message.from === "me" ? "message-row-me" : ""}`}><div className={`message-bubble ${message.from === "me" ? "message-bubble-me" : ""}`}>{message.text}<div className="message-meta">{message.time}{message.from === "me" && (message.read ? <CheckCheck size={14} /> : <Check size={14} />)}</div></div></div>)}<div className="typing-indicator"><span /><span /><span /> {active?.name.split(" ")[0]} is typing</div></> : <div className="empty-chat"><div className="empty-icon"><MessageCircle size={24} /></div><h2>Start the conversation</h2><p>Say hello to {active?.name.split(" ")[0]} and make this space yours.</p></div>}</div><form className="composer" onSubmit={sendMessage}><button type="button" className="icon-button"><Paperclip size={19} /></button><input value={composer} onChange={(e) => setComposer(e.target.value)} placeholder={`Message ${active?.name.split(" ")[0] || "someone"}...`} /><button type="button" className="icon-button"><Sparkles size={18} /></button><button className="send-button" aria-label="Send message"><Send size={17} /></button></form></>}
     </section>
     <aside className="details-panel"><div className="details-top"><span>Conversation</span><button className="icon-button"><MoreHorizontal size={18} /></button></div>{active && <><div className="details-person"><Avatar person={active} size="xl" showStatus /><h2>{active.name}</h2><p>@{active.username}</p><div className="id-badge"><Hash size={13} /> {active.id}</div></div><div className="details-section"><span className="details-label">About</span><p>{active.bio}</p></div><div className="details-section"><span className="details-label">Shared space</span><div className="shared-stat"><span><Users size={16} /> Members</span><strong>2</strong></div><div className="shared-stat"><span><Paperclip size={16} /> Files shared</span><strong>0</strong></div></div></>}</aside>
     {profileOpen && <ProfileModal user={state.user} onClose={() => setProfileOpen(false)} onCopy={copyId} onSave={async (user) => {
@@ -240,8 +322,38 @@ function ChatDashboard({ state, setState, onLogout }) {
 }
 
 function FindPeople({ people, query, setQuery, onSelect }) {
-  const results = people.filter((person) => `${person.id} ${person.name} ${person.username}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="find-panel"><div className="find-heading"><span className="auth-kicker">Grow your circle</span><h1>Find people</h1><p>Search by Connectify ID, name, or username to start a private conversation.</p></div><div className="search-large"><Search size={19} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try CN-482951 or a username" /></div><div className="find-results">{results.map((person) => <button className="person-result" key={person.id} onClick={() => onSelect(person)}><Avatar person={person} size="lg" showStatus /><span><strong>{person.name}</strong><small>@{person.username} · {person.id}</small></span><ArrowUpRight size={18} /></button>)}</div></div>;
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchError, setSearchError] = useState("");
+  const [searching, setSearching] = useState(false);
+  async function searchPeople(event) {
+    event?.preventDefault();
+    setSearchError("");
+    setSearching(true);
+    try {
+      if (apiEnabled && /^CN-\d{6}$/i.test(query.trim())) {
+        const { user } = await apiRequest(`/users/search/${encodeURIComponent(query.trim().toUpperCase())}`);
+        setSearchResults([{ ...user, initials: user.name.split(" ").map((word) => word[0]).join("").slice(0, 2).toUpperCase(), color: "ink" }]);
+      } else {
+        const localResults = people.filter((person) => `${person.id} ${person.name} ${person.username}`.toLowerCase().includes(query.toLowerCase()));
+        setSearchResults(localResults);
+      }
+    } catch (error) {
+      setSearchResults([]);
+      setSearchError(error.message);
+    } finally {
+      setSearching(false);
+    }
+  }
+  useEffect(() => {
+    if (apiEnabled && query.trim()) {
+      const timer = setTimeout(() => searchPeople(), 350);
+      return () => clearTimeout(timer);
+    }
+  }, [query]);
+  const results = searchResults.length || !query.trim()
+    ? searchResults
+    : people.filter((person) => `${person.id} ${person.name} ${person.username}`.toLowerCase().includes(query.toLowerCase()));
+  return <div className="find-panel"><div className="find-heading"><span className="auth-kicker">Grow your circle</span><h1>Find people</h1><p>Search by Connectify ID, name, or username to start a private conversation.</p></div><form className="search-large" onSubmit={searchPeople}><Search size={19} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try CN-482951 or a username" /><button type="submit" className="icon-button" aria-label="Search"><ArrowUpRight size={17} /></button></form>{searchError && <div className="form-error">{searchError}</div>}<div className="find-results">{searching ? <p>Searching...</p> : results.map((person) => <button className="person-result" key={person.id} onClick={() => onSelect(person)}><Avatar person={person} size="lg" showStatus /><span><strong>{person.name}</strong><small>@{person.username} · {person.id}</small></span><ArrowUpRight size={18} /></button>)}</div></div>;
 }
 
 function ProfileModal({ user, onClose, onCopy, onSave }) {
@@ -268,6 +380,7 @@ function App() {
     if (apiEnabled && state.user) {
       try { await apiRequest("/auth/logout", { method: "POST" }); } catch { /* local logout still clears the client session */ }
     }
+    setApiToken(null);
     setState({ ...state, user: null });
     setScreen("landing");
   }

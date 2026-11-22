@@ -26,6 +26,8 @@ router.post("/:conversationId", requireAuth, asyncHandler(async (req, res) => {
   const message = await Message.create({ conversationId: conversation._id, sender: req.user._id, content, deliveredTo: [req.user._id] });
   conversation.lastMessage = content; conversation.lastMessageAt = message.createdAt; await conversation.save();
   await message.populate("sender", "name username userId avatar");
+  req.app.get("io")?.to(`conversation:${conversation._id}`).emit("receive_message", message);
+  req.app.get("io")?.to(`user:${recipient}`).emit("receive_message", message);
   res.status(201).json({ success: true, message: "Message sent", data: { message, recipientId: recipient } });
 }));
 router.delete("/:messageId", requireAuth, asyncHandler(async (req, res) => { const message = await Message.findOne({ _id: req.params.messageId, sender: req.user._id }); if (!message) throw new ApiError(404, "Message not found"); message.deletedForEveryone = true; message.content = "Message deleted"; await message.save(); res.json({ success: true, message: "Message deleted", data: { message } }); }));

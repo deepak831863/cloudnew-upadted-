@@ -35,6 +35,7 @@ function socketOrigin(origin, callback) {
   else callback(new Error("Origin is not allowed"));
 }
 const io = new Server(server, { cors: { origin: socketOrigin, credentials: true } });
+app.set("io", io);
 
 app.use(helmet());
 app.use(cors({

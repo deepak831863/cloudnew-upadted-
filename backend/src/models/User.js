@@ -12,7 +12,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 userSchema.methods.publicProfile = function publicProfile() {
-  return { id: this._id, name: this.name, username: this.username, userId: this.userId, avatar: this.avatar, bio: this.bio, isOnline: this.isOnline, lastSeen: this.lastSeen, createdAt: this.createdAt };
+  return { id: this.userId, mongoId: this._id, name: this.name, username: this.username, userId: this.userId, avatar: this.avatar, bio: this.bio, isOnline: this.isOnline, lastSeen: this.lastSeen, createdAt: this.createdAt };
 };
 
 export default mongoose.model("User", userSchema);

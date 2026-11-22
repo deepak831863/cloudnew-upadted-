@@ -11,7 +11,13 @@ router.get("/", requireAuth, asyncHandler(async (req, res) => { const conversati
 router.post("/", requireAuth, asyncHandler(async (req, res) => {
   const person = await User.findOne({ userId: String(req.body.userId || "").toUpperCase() });
   if (!person || person._id.equals(req.user._id)) throw new ApiError(404, "That person could not be found");
-  let conversation = await Conversation.findOne({ type: "private", participants: { $all: [req.user._id, person._id] }, $expr: { $eq: [{ $size: "$participants" }, 2] } });
+  let conversation = await Conversation.findOne({
+    $and: [
+      { type: "private" },
+      { participants: { $all: [req.user._id, person._id] } },
+      { participants: { $size: 2 } }
+    ]
+  });
   if (!conversation) conversation = await Conversation.create({ participants: [req.user._id, person._id] });
   await conversation.populate("participants", "name username userId avatar bio isOnline lastSeen");
   res.status(201).json({ success: true, message: "Conversation ready", data: { conversation } });

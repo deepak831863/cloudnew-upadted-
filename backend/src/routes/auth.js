@@ -18,22 +18,25 @@ const credentials = [
   body("password").isLength({ min: 8, max: 128 }).withMessage("Password must be 8-128 characters")
 ];
 function setCookie(res, token) {
-  res.cookie("connectify_token", token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 7 * 24 * 60 * 60 * 1000 });
+  res.cookie("connectify_token", token, { httpOnly: true, sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", secure: process.env.NODE_ENV === "production", maxAge: 7 * 24 * 60 * 60 * 1000 });
 }
 
 router.post("/register", credentials.concat([body("confirmPassword").custom((value, { req }) => value === req.body.password).withMessage("Passwords do not match")]), validate, asyncHandler(async (req, res) => {
   const existing = await User.exists({ username: req.body.username.toLowerCase() });
   if (existing) throw new ApiError(409, "Username is already taken");
   const user = await User.create({ name: req.body.name, username: req.body.username, userId: await generateUserId(), password: await bcrypt.hash(req.body.password, 12) });
-  setCookie(res, signToken(user._id.toString()));
-  res.status(201).json({ success: true, message: "Account created", data: { user: user.publicProfile() } });
+  const token = signToken(user._id.toString());
+  setCookie(res, token);
+  res.status(201).json({ success: true, message: "Account created", data: { user: user.publicProfile(), token } });
 }));
 
 router.post("/login", [body("userId").matches(/^CN-\d{6}$/i).withMessage("Enter a valid Connectify ID"), body("password").notEmpty().withMessage("Password is required")], validate, asyncHandler(async (req, res) => {
   const user = await User.findOne({ userId: req.body.userId.toUpperCase() }).select("+password");
   if (!user || !(await bcrypt.compare(req.body.password, user.password))) throw new ApiError(401, "Invalid Connectify ID or password");
-  user.isOnline = true; await user.save(); setCookie(res, signToken(user._id.toString()));
-  res.json({ success: true, message: "Signed in", data: { user: user.publicProfile() } });
+  user.isOnline = true; await user.save();
+  const token = signToken(user._id.toString());
+  setCookie(res, token);
+  res.json({ success: true, message: "Signed in", data: { user: user.publicProfile(), token } });
 }));
 
 router.post("/logout", requireAuth, asyncHandler(async (req, res) => { req.user.isOnline = false; req.user.lastSeen = new Date(); await req.user.save(); res.clearCookie("connectify_token"); res.json({ success: true, message: "Signed out", data: {} }); }));
